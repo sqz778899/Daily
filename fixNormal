@@ -1,0 +1,238 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+import sys
+import fbx
+import FbxCommon
+import easygui as gui
+
+def saveScene( pFilename, pFbxManager, pFbxScene, pAsASCII=False ):
+        ''' Save the scene using the Python FBX API '''
+        exporter = fbx.FbxExporter.Create( pFbxManager, '' )
+
+        if pAsASCII:
+            #DEBUG: Initialize the FbxExporter object to export in ASCII.
+            asciiFormatIndex = getASCIIFormatIndex( pFbxManager )
+            isInitialized = exporter.Initialize( pFilename, asciiFormatIndex )
+        else:
+            isInitialized = exporter.Initialize( pFilename )
+
+        if( isInitialized == False ):
+            raise Exception( 'Exporter failed to initialize. Error returned: ' + str( exporter.GetStatus().GetErrorString() ) )
+
+        exporter.Export( pFbxScene )
+
+        exporter.Destroy()
+
+def ProcessMesh(pNode,DICT_1,RpolygonVertices):
+    #根据mesh结点获得mesh
+    pMesh = pNode.GetMesh()
+    if (pMesh == None):
+        print 1
+        return
+
+    #获得mesh的构成顶点 = polygonVertices
+    #获得normal的层 = lNormals
+    #获得三角面的数量 = triangleCount
+    #定义一个计数器 = vertexCounter
+    #定义一个列表用来储存法线的值 = normallist
+    polygonVertices = RpolygonVertices
+    lNormals = pMesh.GetElementNormal()
+    triangleCount = pMesh.GetPolygonCount()
+    vertexCounter = 0
+    normallist = []
+
+    #逐顶点去遍历，通过函数GetNormal获得法线值
+    for i in range(triangleCount):
+        for j in range(3):
+            ctrlPointIndex = polygonVertices[i * 3 + j]
+            GetNormal(lNormals, ctrlPointIndex, vertexCounter, normallist)
+            vertexCounter = vertexCounter + 1
+
+    #GetNormal会返回normallist，这个list已经储存好啦我们要的法线值
+    #下面根据polygonVertices制作索引，一个点一个法线值对应上，key和value，储存在全局DICT_1中
+    for i in range(len(polygonVertices)):
+        key = str(i)
+        value = normallist[i]
+        DICT_1[key] = value
+
+def ProcessMesh2(pNode):
+    #根据mesh结点获得mesh
+    pMesh = pNode.GetMesh()
+    if (pMesh == None):
+        print 1
+        return
+    #首先情况mesh的层，先把坏掉的法线信息丢掉
+    pMesh.ClearLayers()
+    #创建一个新的层
+    pMesh.CreateLayer()
+    lLayer = pMesh.GetLayer(0)
+
+    #获得mesh的构成顶点 = polygonVertices
+    polygonVertices = pMesh.GetPolygonVertices()
+    indexVertices = []
+
+    # 重新排序polygonVertices，并把排序结果加入到索引顶点列表中
+    for i in range(len(polygonVertices)):
+        indexVertices.append(i)
+
+    # 新建一个normal的层，用来储存normal信息
+    lNormals = pMesh.CreateElementNormal()
+    # 利用Senormal函数修改函数值
+    SetNormal(lNormals, lLayer, indexVertices)
+def ProcessVertics(pNode):
+    pMesh = pNode.GetMesh()
+    if (pMesh == None):
+        print 1
+        return
+
+    # 获得mesh的构成顶点 = polygonVertices
+    polygonVertices = pMesh.GetPolygonVertices()
+    return polygonVertices
+
+def GetNormal(p_Normals,p_orginPolygonIndex,p_VertexIndex, p_Normallist):
+    #定义一个FbxVector4类型的列表（FBX自己储存法线值的类型）
+    #定义X,Y,Z
+    normalSolo = FbxCommon.FbxVector4(0, 0, 0)
+    x, y, z = 0, 0, 0
+
+    #如果mesh的法线映射类型是eByControlPoint（就是整个一个光滑组，全软边）
+    if p_Normals.GetMappingMode() == FbxCommon.FbxLayerElement.eByControlPoint:
+        if p_Normals.GetReferenceMode() == FbxCommon.FbxLayerElement.eDirect:
+            x = p_Normals.GetDirectArray().GetAt(p_orginPolygonIndex)[0]
+            y = p_Normals.GetDirectArray().GetAt(p_orginPolygonIndex)[1]
+            z = p_Normals.GetDirectArray().GetAt(p_orginPolygonIndex)[2]
+        if p_Normals.GetReferenceMode() == FbxCommon.FbxLayerElement.eIndexToDirect:
+            index = p_Normals.GetIndexArray().GetAt(p_orginPolygonIndex)
+            x = p_Normals.GetDirectArray().GetAt(index)[0]
+            y = p_Normals.GetDirectArray().GetAt(index)[1]
+            z = p_Normals.GetDirectArray().GetAt(index)[2]
+
+    # 如果mesh的法线映射类型是eByPolygonVertex（就是没有光滑组，全硬边）
+    if p_Normals.GetMappingMode() == FbxCommon.FbxLayerElement.eByPolygonVertex:
+        if p_Normals.GetReferenceMode() == FbxCommon.FbxLayerElement.eDirect:
+            x = p_Normals.GetDirectArray().GetAt(p_VertexIndex)[0]
+            y = p_Normals.GetDirectArray().GetAt(p_VertexIndex)[1]
+            z = p_Normals.GetDirectArray().GetAt(p_VertexIndex)[2]
+        if p_Normals.GetReferenceMode() == FbxCommon.FbxLayerElement.eIndexToDirect:
+            index = p_Normals.GetIndexArray().GetAt(p_VertexIndex)
+            x = p_Normals.GetDirectArray().GetAt(index)[0]
+            y = p_Normals.GetDirectArray().GetAt(index)[1]
+            z = p_Normals.GetDirectArray().GetAt(index)[2]
+
+    #把单个的normal值设置在变量normalSolo里，然后加进列表p_Normallist中，让我们最后获得一个由法线值组成的列表
+    normalSolo.Set(x,y,z)
+    p_Normallist.append(normalSolo)
+
+def SetNormal(p_Normals,lLayer, indexVertices):
+    #这个我肯定是逐顶点去set，所以映射模式是逐顶点
+    p_Normals.SetMappingMode(FbxCommon.FbxLayerElement.eByPolygonVertex)
+    p_Normals.SetReferenceMode(FbxCommon.FbxLayerElement.eDirect)
+
+    #根据索引，我们把第0个顶点写入字典DICT_1的key=0对应的法线值，
+    #把第1个顶点写入字典DICT_1的key=1对应的法线值，以此类推
+    for i in indexVertices:
+        p_Normals.GetDirectArray().Add(DICT_1[str(i)])
+
+    #最后把normal写入整个层级
+    lLayer.SetNormals(p_Normals)
+
+def ProcessNode(pNode):
+    #获取结点的属性，也就是标签，标签是mesh就代表这个是mesh结点
+    NodeAttribute = pNode.GetNodeAttribute()
+    if (NodeAttribute is not None):
+        NodeAttributeType = NodeAttribute.GetAttributeType()
+        if NodeAttributeType == FbxCommon.FbxNodeAttribute.eMesh:
+            print('mesh')
+            return pNode
+        else:
+            print 0
+
+    #利用递归来获得结点，一旦遇到mesh结点就可以返回
+    for each in range(pNode.GetChildCount()):
+        return ProcessNode(pNode.GetChild(each))
+
+def ProcessNode2(pNode):
+    NodeAttribute = pNode.GetNodeAttribute()
+    if (NodeAttribute is not None):
+        NodeAttributeType = NodeAttribute.GetAttributeType()
+        if NodeAttributeType == FbxCommon.FbxNodeAttribute.eMesh:
+            print('normalmesh')
+            return pNode
+        else:
+            print 0
+    for each in range(pNode.GetChildCount()):
+        return ProcessNode2(pNode.GetChild(each))
+
+def FbxImport(filename,fbxScene):
+    #先清清嗓子
+    fbxScene.Clear()
+
+    #IO就是输入输出的意思，通过管理建立一个输入输出模块
+    FbxIOSettings = fbxManager.GetIOSettings()
+
+    #建立一个导入模块
+    fbxImporter = FbxCommon.FbxImporter.Create(fbxManager, "")
+
+    #建立一个导入状态栏，判断FBX初始化失败还是成功用的
+    importStatus = fbxImporter.Initialize(filename, -1, FbxIOSettings)
+
+    #如果初始化失败，就打印出来，如果成功，那就导入呗
+    if not importStatus:
+        print 1
+        print("\n\nAn error occurred while loading the scene...")
+    else:
+        fbxScene.Clear()
+        importStatus = fbxImporter.Import(fbxScene)
+        fbxImporter.Destroy()
+        node = fbxScene.GetRootNode()
+
+        #牢记我们return的是node，场景的根结点，我们要根据这个结点去找这个FBX的mesh
+        return node
+
+DICT_1 = {}
+
+if __name__ == "__main__":
+    str_pathTarget = gui.enterbox(msg='请输入法线正确的源模型地址\n别忘了文件后缀哦')
+    #新建FBX的 Manager，一切由Manage开始
+    fbxManager = fbx.FbxManager.Create()
+    fbxManager2 = fbx.FbxManager.Create()
+    #新建FBX的sence场景
+    fbxScene1 = fbx.FbxScene.Create(fbxManager, '')
+    fbxScene2 = fbx.FbxScene.Create(fbxManager2, '')
+    #利用import函数获得模型结点，import函数自己写，确保return回来的是想要的
+
+    str_pathSorce = gui.fileopenbox()
+    print str_pathSorce
+    strExtension = ['fbx','FBX']
+    if str_pathSorce.split('.').pop() not in strExtension:
+        print('这不是fbx格式文件')
+        erro = gui.msgbox("请重启脚本选择正确文件")
+    else:
+        pass
+
+    node1 = FbxImport(str_pathTarget,fbxScene1)
+    node2 = FbxImport(str_pathSorce,fbxScene2)
+
+    #获取node1的mesh结点
+    meshNode_1 = ProcessNode(node1)
+    # 获取node2的mesh结点，就是那个坏掉法线的那个三角体
+    meshNode_2 = ProcessNode2(node2)
+    RpolygonVertices = ProcessVertics(meshNode_2)
+
+    #写一串函数，目的是获取一个字典的索引，key是根据polygonVertices建立的索引，value是每个顶点索引对应的法线值
+    ProcessMesh(meshNode_1,DICT_1,RpolygonVertices)
+    #写一串的函数，利用DICT_1的索引和法线值去修复法线，之所以没传进去字典，是因为我的字典是个全局变量hhhh
+    ProcessMesh2(meshNode_2)
+
+    str_Save = gui.buttonbox(msg='你想要如何保存', choices=['覆盖原文件', '另存为'])
+    if str_Save == '覆盖原文件':
+        saveScene(str_pathSorce, fbxManager2, fbxScene2, pAsASCII=False)
+    elif str_Save == '另存为':
+        str_SavePath = gui.filesavebox()
+        saveScene(str_SavePath, fbxManager2, fbxScene2, pAsASCII=False)
+    # saveScene('E:\FBXpy\\7bodyright.FBX', fbxManager2, fbxScene2, pAsASCII=False)
+
+    #保持好习惯，清理下内存，虽然python会自动清理，但是我们必须要有精神洁癖
+    fbxManager.Destroy()
+    fbxManager2.Destroy()
+    sys.exit(0)
